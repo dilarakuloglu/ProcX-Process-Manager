@@ -1,0 +1,31 @@
+# CLion project files
+.idea/
+
+# CMake build directories
+cmake-build-debug/
+cmake-build-release/
+CMakeFiles/
+Testing/
+build/
+out/
+bin/
+
+# CMake cache and build scripts
+CMakeCache.txt
+build.ninja
+cmake_install.cmake
+
+# Compiled object files
+*.o
+*.obj
+
+# Executables
+operating_systems
+procx
+
+# MacOS system files
+.DS_Store
+
+# Ninja build files
+.ninja_deps
+.ninja_log
