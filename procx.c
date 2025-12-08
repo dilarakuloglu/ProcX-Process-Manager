@@ -40,6 +40,7 @@ typedef struct {
 
 #define SHM_NAME "/procx_shm"
 #define SHM_SIZE sizeof(SharedData)
+#define MAX_PROCESSES 50
 SharedData *shared_data = NULL; // global pointer buradan RAM e erişecek.
 
 // Mesaj yapısı
@@ -84,6 +85,29 @@ int parse_command(char *command, char **argv) {
   return i;
 }
 
+void trim(char *str) {
+  // kullanıcıdan alınan komutun başında ve sonundaki boşlukları temizler.
+  char *start = str;
+  while (*start == ' ' || *start == '\t')
+    start++;
+
+  if (*start == '\0') {
+    str[0] = '\0';
+    return;
+  }
+
+  char *end = start + strlen(start) - 1;
+  while (end > start && (*end == ' ' || *end == '\t'))
+    end--;
+
+  *(end + 1) = '\0';
+
+  if (start != str)
+    memmove(str, start, strlen(start) + 1);
+}
+
+// ---- INSIDE main() LOOP ----
+
 void start_process(char *command, int mode) {
   char *argv[20];
   int child_status;
@@ -92,7 +116,7 @@ void start_process(char *command, int mode) {
     printf("COMMAND NOT FOUND !");
     return;
   }
-  printf("argv[0] = '%s'\n", argv[0]);
+  printf("main process : argv[0] = '%s'\n", argv[0]);
   printf("argv[1] = '%s'\n", argv[1]);
 
   pid_t pid = fork();
@@ -110,9 +134,34 @@ void start_process(char *command, int mode) {
     exit(1);
 
   } else {
-    if (mode == ATTACHED) {
-      waitpid(pid, &child_status, 0);
+    // Parent, DETACHED çocukları beklemez ama kaydeder. Yani detached
+    // modda bile shared memory’ye kaydı her zaman parent yapar. DETACHED mod
+    // sadece terminal kapanınca ölmemesi anlamına gelir.
+    // fork()tan dönen pid == child_pid !!!
+
+    int process_idx = shared_data->process_count;
+    if (process_idx >= MAX_PROCESSES) {
+      fprintf(stderr, "process table full\n");
+      return;
     }
+    shared_data->processes[process_idx].pid = pid;
+    printf("%d\n", shared_data->processes[process_idx].pid);
+    shared_data->processes[process_idx].owner_pid = getpid();
+    strcpy(shared_data->processes[process_idx].command, command);
+    shared_data->processes[process_idx].mode = mode;
+    shared_data->processes[process_idx].status = RUNNING;
+    shared_data->processes[process_idx].is_active = 1;
+    shared_data->processes[process_idx].start_time = time(NULL);
+
+    if (mode == ATTACHED) {
+      // Sadece attached modda parent child processi bekleyecek.
+      waitpid(pid, &child_status, 0);
+      shared_data->processes[process_idx].status = TERMINATED;
+      shared_data->processes[process_idx].is_active = 0;
+    }
+
+    shared_data->process_count++;
+    printf(" Process :count %d\n", shared_data->process_count);
   }
 }
 
@@ -138,12 +187,45 @@ void init_shared_memory() {
   // shm_open() yeni shared memory oluşturur bu RAM de yer açar ama içerik
   // rastgele olur. o yüzden tüm ProcessInfo temizlenmeli.
 
-  if (shared_data->process_count < 0 || shared_data->process_count > 50) {
-    memset(shared_data, 0, SHM_SIZE);
-  }
+  memset(shared_data, 0, SHM_SIZE);
 }
 
 int main(void) {
-  // init_shared_memory();
+  shm_unlink("/procx_shm");
+  // eski bozuk shared memory objesini siliyor, ftruncate Invalid argument
+  // hatası bu sayede kaybolmuş oldu.
+  init_shared_memory();
+  char command[256];
+  while (true) {
+    ProcessMode mode = ATTACHED;
+    printf("ENTER A COMMAND : "); // sleep 5
+    if (fgets(command, sizeof(command), stdin) == NULL) {
+      printf("\nExiting ProcX...\n");
+      break; // EOF
+    }
+    size_t len = strlen(command);
+    if (len > 0 && command[len - 1] == '\n') {
+      command[len - 1] = '\0';
+      len--;
+    }
+    trim(command); // baştaki ve sondaki boşluklar silinecek. "   sleep 5"
+
+    if (command[0] == '\0')
+      continue;
+
+    // detached kontrolü
+    len = strlen(command);
+    if (len > 0 && command[len - 1] == '&') {
+      mode = DETACHED;
+      command[len - 1] = '\0';
+      trim(command); // "sleep 2   & " de & kaldırıltsan sonra fazla boşluklar
+                     // silinecek.
+    }
+
+    if (command[0] == '\0')
+      continue;
+
+    start_process(command, mode);
+  }
   return 0;
 }
