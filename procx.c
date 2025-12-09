@@ -11,7 +11,6 @@
 #include <unistd.h> // fork, getpid, exec, pid_t
 
 typedef enum { ATTACHED = 0, DETACHED = 1 } ProcessMode;
-
 typedef enum { RUNNING = 0, TERMINATED = 1 } ProcessStatus;
 
 typedef struct {
@@ -51,8 +50,12 @@ typedef struct {
   pid_t target_pid; // Hedef process PID
 } Message;
 
+int get_menu_choice();
+void start_process_menu(void);
 void start_process(char *command, int mode);
 int parse_command(char *command, char **argv);
+void trim(char *str);
+void init_shared_memory();
 
 // Shared memory senkronize veri tutar ama olayı bildirmez .Terminal 1 de işlem
 // yapınca terminal 2 nin anında öğrenmesi için message queue lazım.
@@ -69,6 +72,88 @@ int parse_command(char *command, char **argv);
 // Kullanıcıdan alınıp child processte yürütülecek olan programı uygun argüman
 // haline getirir.
 // args[0]= sleep - args[1]= 10 - args[2]= NULL
+
+int get_menu_choice() {
+  char input[64];
+
+  while (true) {
+    printf("\n===== ProcX v1.0 =====\n");
+    printf("1. Launch New Process\n");
+    printf("2. List Active Processes\n");
+    printf("3. Terminate a Process\n");
+    printf("0. Exit\n");
+    printf("Your choice: ");
+
+    if (fgets(input, sizeof(input), stdin) == NULL) {
+      printf("\nEOF received. Exiting...\n");
+      return 0;
+    }
+
+    input[strcspn(input, "\n")] = '\0';
+    trim(input);
+
+    if (input[0] == '\0') {
+      printf("Empty input is not allowed. Please try again.\n");
+      continue;
+    }
+
+    if (strcmp(input, "0") == 0)
+      return 0;
+    if (strcmp(input, "1") == 0)
+      return 1;
+    if (strcmp(input, "2") == 0)
+      return 2;
+    if (strcmp(input, "3") == 0)
+      return 3;
+
+    printf("Invalid selection! Please enter 0, 1, 2 or 3.\n");
+  }
+}
+
+void start_process_menu(void) {
+  char command[256];
+  char input[16];
+  ProcessMode mode;
+
+  printf("Enter a command to run: ");
+  if (fgets(command, sizeof(command), stdin) == NULL) {
+    printf("No input detected. Returning to menu.\n");
+    return;
+  }
+
+  command[strcspn(command, "\n")] = '\0';
+  trim(command);
+
+  if (command[0] == '\0') {
+    printf("Empty command. Nothing to run.\n");
+    return;
+  }
+
+  while (true) {
+    printf("Select mode (0 = Attached, 1 = Detached): ");
+
+    if (fgets(input, sizeof(input), stdin) == NULL) {
+      printf("No input detected. Cancelling process launch.\n");
+      return;
+    }
+
+    input[strcspn(input, "\n")] = '\0';
+    trim(input);
+
+    if (strcmp(input, "0") == 0) {
+      mode = ATTACHED;
+      break;
+    }
+
+    if (strcmp(input, "1") == 0) {
+      mode = DETACHED;
+      break;
+    }
+
+    printf("Invalid mode! Please enter 0 or 1.\n");
+  }
+  start_process(command, mode);
+}
 
 int parse_command(char *command, char **argv) {
   for (int i = 0; i < 20; i++) {
@@ -106,8 +191,6 @@ void trim(char *str) {
     memmove(str, start, strlen(start) + 1);
 }
 
-// ---- INSIDE main() LOOP ----
-
 void start_process(char *command, int mode) {
   char *argv[20];
   int child_status;
@@ -116,9 +199,6 @@ void start_process(char *command, int mode) {
     printf("COMMAND NOT FOUND !");
     return;
   }
-  printf("main process : argv[0] = '%s'\n", argv[0]);
-  printf("argv[1] = '%s'\n", argv[1]);
-
   pid_t pid = fork();
 
   if (pid < 0) {
@@ -145,7 +225,6 @@ void start_process(char *command, int mode) {
       return;
     }
     shared_data->processes[process_idx].pid = pid;
-    printf("%d\n", shared_data->processes[process_idx].pid);
     shared_data->processes[process_idx].owner_pid = getpid();
     strcpy(shared_data->processes[process_idx].command, command);
     shared_data->processes[process_idx].mode = mode;
@@ -192,40 +271,30 @@ void init_shared_memory() {
 
 int main(void) {
   shm_unlink("/procx_shm");
-  // eski bozuk shared memory objesini siliyor, ftruncate Invalid argument
-  // hatası bu sayede kaybolmuş oldu.
   init_shared_memory();
   char command[256];
+
   while (true) {
-    ProcessMode mode = ATTACHED;
-    printf("ENTER A COMMAND : "); // sleep 5
-    if (fgets(command, sizeof(command), stdin) == NULL) {
-      printf("\nExiting ProcX...\n");
-      break; // EOF
+    int choice = get_menu_choice();
+    switch (choice) {
+    case 0:
+      printf("Shutting down ProcX...\n");
+      return 0;
+    case 1:
+      printf("\n--- Launch New Process ---\n");
+      start_process_menu();
+      break;
+
+    case 2:
+      printf("\n--- Active Processes ---\n");
+      // list_processes();
+      break;
+    case 3:
+      printf("\n--- Terminate Process ---\n");
+      // terminate_process_menu();
+      break;
     }
-    size_t len = strlen(command);
-    if (len > 0 && command[len - 1] == '\n') {
-      command[len - 1] = '\0';
-      len--;
-    }
-    trim(command); // baştaki ve sondaki boşluklar silinecek. "   sleep 5"
-
-    if (command[0] == '\0')
-      continue;
-
-    // detached kontrolü
-    len = strlen(command);
-    if (len > 0 && command[len - 1] == '&') {
-      mode = DETACHED;
-      command[len - 1] = '\0';
-      trim(command); // "sleep 2   & " de & kaldırıltsan sonra fazla boşluklar
-                     // silinecek.
-    }
-
-    if (command[0] == '\0')
-      continue;
-
-    start_process(command, mode);
   }
+
   return 0;
 }
