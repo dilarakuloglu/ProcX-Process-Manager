@@ -240,37 +240,57 @@ void start_process(char *command, int mode) {
     }
 
     shared_data->process_count++;
-    printf(" Process :count %d\n", shared_data->process_count);
+    printf("\nProcess :count %d\n", shared_data->process_count);
   }
 }
 
 void init_shared_memory() {
-  int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
-  if (fd == -1) {
-    perror("shm_open failed");
-    exit(1);
-  }
+  int fd = shm_open(SHM_NAME, O_RDWR, 0666);
+  int first_instance = 0;
 
-  if (ftruncate(fd, SHM_SIZE) == -1) {
-    perror("ftruncate failed");
-    exit(1);
+  // shared memory hiç yoksa oluştur.
+  if (fd == -1) {
+    fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+    if (fd == -1) {
+      perror("shm_open failed");
+      exit(1);
+    }
+    first_instance = 1;
+
+    if (ftruncate(fd, SHM_SIZE) == -1) {
+      perror("ftruncate failed");
+      exit(1);
+    }
   }
 
   shared_data = mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-
   if (shared_data == MAP_FAILED) {
     perror("mmap failed");
     exit(1);
   }
 
-  // shm_open() yeni shared memory oluşturur bu RAM de yer açar ama içerik
-  // rastgele olur. o yüzden tüm ProcessInfo temizlenmeli.
+  close(fd);
+  // shared memory ilk kez oluşturulmuşsa temizle.
+  if (first_instance) {
+    memset(shared_data, 0, SHM_SIZE);
+    printf("Shared memory created and initialized.\n");
+  } else {
+    // mevcut shared memorye bağlanıldı tutarlılık kontrolü
+    if (shared_data->process_count < 0 ||
+        shared_data->process_count > MAX_PROCESSES) {
+      printf("Shared memory corrupted — resetting.\n");
+      memset(shared_data, 0, SHM_SIZE);
+    }
 
-  memset(shared_data, 0, SHM_SIZE);
+    printf("Shared memory attached. Existing process count = %d\n",
+           shared_data->process_count);
+  }
 }
+// shm_open() yeni shared memory oluşturur bu RAM de yer açar ama içerik
+// rastgele olur. o yüzden tüm ProcessInfo temizlenmeli.
 
 int main(void) {
-  shm_unlink("/procx_shm");
+  shm_unlink(SHM_NAME); // multi-terminal modda silinecek.
   init_shared_memory();
   char command[256];
 
