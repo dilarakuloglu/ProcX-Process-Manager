@@ -1,4 +1,5 @@
-#include <fcntl.h>  // O_CREAT, O_RDWR
+#include <fcntl.h> // O_CREAT, O_RDWR
+#include <semaphore.h>
 #include <signal.h> // pid_t, kill, sinyal tipleri
 #include <stdbool.h>
 #include <stdio.h>  // printf, perror vs.
@@ -39,8 +40,10 @@ typedef struct {
 
 #define SHM_NAME "/procx_shm"
 #define SHM_SIZE sizeof(SharedData)
+#define SEM_NAME "/procx_sem"
 #define MAX_PROCESSES 50
 SharedData *shared_data = NULL; // global pointer buradan RAM e erişecek.
+sem_t *procx_sem = NULL;
 
 // Mesaj yapısı
 typedef struct {
@@ -191,6 +194,15 @@ void trim(char *str) {
     memmove(str, start, strlen(start) + 1);
 }
 
+void init_semaphore() {
+  procx_sem = sem_open(SEM_NAME, O_CREAT, 0666, 1);
+
+  if (procx_sem == SEM_FAILED) {
+    perror("sem_open failed");
+    exit(1);
+  }
+}
+
 void start_process(char *command, int mode) {
   char *argv[20];
   int child_status;
@@ -219,9 +231,11 @@ void start_process(char *command, int mode) {
     // sadece terminal kapanınca ölmemesi anlamına gelir.
     // fork()tan dönen pid == child_pid !!!
 
+    sem_wait(procx_sem);
     int process_idx = shared_data->process_count;
     if (process_idx >= MAX_PROCESSES) {
       fprintf(stderr, "process table full\n");
+      sem_post(procx_sem);
       return;
     }
     shared_data->processes[process_idx].pid = pid;
@@ -240,6 +254,7 @@ void start_process(char *command, int mode) {
     }
 
     shared_data->process_count++;
+    sem_post(procx_sem);
     printf("\nProcess :count %d\n", shared_data->process_count);
   }
 }
@@ -285,12 +300,13 @@ void init_shared_memory() {
     printf("Shared memory attached. Existing process count = %d\n",
            shared_data->process_count);
   }
+  init_semaphore();
 }
 // shm_open() yeni shared memory oluşturur bu RAM de yer açar ama içerik
 // rastgele olur. o yüzden tüm ProcessInfo temizlenmeli.
 
 int main(void) {
-  shm_unlink(SHM_NAME); // multi-terminal modda silinecek.
+  // shm_unlink(SHM_NAME); // multi-terminal modda silinecek.
   init_shared_memory();
   char command[256];
 
@@ -299,7 +315,11 @@ int main(void) {
     switch (choice) {
     case 0:
       printf("Shutting down ProcX...\n");
+      if (procx_sem) {
+        sem_close(procx_sem);
+      }
       return 0;
+
     case 1:
       printf("\n--- Launch New Process ---\n");
       start_process_menu();
