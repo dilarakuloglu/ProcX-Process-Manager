@@ -234,10 +234,12 @@ void start_process(char *command, int mode) {
     sem_wait(procx_sem);
     int process_idx = shared_data->process_count;
     if (process_idx >= MAX_PROCESSES) {
+
       fprintf(stderr, "process table full\n");
       sem_post(procx_sem);
       return;
     }
+    shared_data->process_count++;
     shared_data->processes[process_idx].pid = pid;
     shared_data->processes[process_idx].owner_pid = getpid();
     strcpy(shared_data->processes[process_idx].command, command);
@@ -245,18 +247,52 @@ void start_process(char *command, int mode) {
     shared_data->processes[process_idx].status = RUNNING;
     shared_data->processes[process_idx].is_active = 1;
     shared_data->processes[process_idx].start_time = time(NULL);
+    sem_post(procx_sem);
 
     if (mode == ATTACHED) {
       // Sadece attached modda parent child processi bekleyecek.
       waitpid(pid, &child_status, 0);
+      sem_wait(procx_sem);
       shared_data->processes[process_idx].status = TERMINATED;
       shared_data->processes[process_idx].is_active = 0;
     }
-
-    shared_data->process_count++;
     sem_post(procx_sem);
     printf("\nProcess :count %d\n", shared_data->process_count);
   }
+}
+
+void list_processes() {
+  sem_wait(procx_sem);
+
+  printf("\n==============================================\n");
+  printf("               ACTIVE PROCESSES               \n");
+  printf("==============================================\n");
+  printf("%-8s | %-20s | %-9s | %-8s | %-6s\n", "PID", "Command", "Mode",
+         "Owner", "Time");
+  printf("----------------------------------------------\n");
+
+  int active_count = 0;
+  time_t now = time(NULL);
+
+  for (int i = 0; i < shared_data->process_count; i++) {
+    ProcessInfo *p = &shared_data->processes[i];
+
+    if (!p->is_active)
+      continue;
+
+    active_count++;
+
+    int elapsed = (int)(now - p->start_time);
+
+    printf("%-8d | %-20s | %-9s | %-8d | %ds\n", p->pid, p->command,
+           (p->mode == DETACHED ? "Detached" : "Attached"), p->owner_pid,
+           elapsed);
+  }
+
+  printf("----------------------------------------------\n");
+  printf("Total: %d active process\n", active_count);
+
+  sem_post(procx_sem);
 }
 
 void init_shared_memory() {
@@ -327,7 +363,7 @@ int main(void) {
 
     case 2:
       printf("\n--- Active Processes ---\n");
-      // list_processes();
+      list_processes();
       break;
     case 3:
       printf("\n--- Terminate Process ---\n");
